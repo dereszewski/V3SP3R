@@ -234,7 +234,7 @@ class FlipperBleService : Service() {
         return NotificationCompat.Builder(this, VesperApplication.CHANNEL_BLE)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(getConnectionText())
-            .setSmallIcon(R.drawable.ic_flipper)
+            .setSmallIcon(R.drawable.ic_flipper_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()
