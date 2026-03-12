@@ -472,6 +472,55 @@ fun SettingsScreen(
                 }
             }
 
+            // Smart Glasses Section
+            item {
+                SettingsSection(title = "Smart Glasses") {
+                    SettingsSwitch(
+                        title = "Enable Smart Glasses",
+                        subtitle = "Connect Mentra or other smart glasses via bridge",
+                        checked = state.glassesEnabled,
+                        onCheckedChange = { viewModel.setGlassesEnabled(it) }
+                    )
+
+                    if (state.glassesEnabled) {
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        OutlinedTextField(
+                            value = state.glassesBridgeUrl,
+                            onValueChange = { viewModel.setGlassesBridgeUrl(it) },
+                            label = { Text("Bridge Server URL") },
+                            placeholder = { Text("ws://your-server:8089") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        Text(
+                            text = "Your mentra-bridge server URL. Use ngrok for local dev.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SettingsSwitch(
+                            title = "Auto-Send Voice",
+                            subtitle = "Send glasses transcriptions to AI automatically",
+                            checked = state.glassesAutoSend,
+                            onCheckedChange = { viewModel.setGlassesAutoSend(it) }
+                        )
+
+                        Divider(modifier = Modifier.padding(vertical = 8.dp))
+
+                        SettingsSwitch(
+                            title = "Auto-Connect",
+                            subtitle = "Reconnect to bridge on app startup",
+                            checked = state.glassesAutoConnect,
+                            onCheckedChange = { viewModel.setGlassesAutoConnect(it) }
+                        )
+                    }
+                }
+            }
+
             // Data Section
             item {
                 SettingsSection(title = "Data") {

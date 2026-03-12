@@ -29,7 +29,12 @@ data class SettingsState(
     // TTS (via OpenRouter — uses same API key)
     val ttsEnabled: Boolean = false,
     val ttsVoiceId: String = SettingsStore.DEFAULT_TTS_VOICE,
-    val ttsAutoSpeak: Boolean = false
+    val ttsAutoSpeak: Boolean = false,
+    // Smart Glasses
+    val glassesEnabled: Boolean = false,
+    val glassesBridgeUrl: String = "",
+    val glassesAutoSend: Boolean = true,
+    val glassesAutoConnect: Boolean = false
 )
 
 @HiltViewModel
@@ -102,6 +107,27 @@ class SettingsViewModel @Inject constructor(
                     ttsVoiceId = tts.ttsVoiceId,
                     ttsAutoSpeak = tts.ttsAutoSpeak
                 )
+            }.combine(
+                combine(
+                    settingsStore.glassesEnabled,
+                    settingsStore.glassesBridgeUrl,
+                    settingsStore.glassesAutoSend,
+                    settingsStore.glassesAutoConnect
+                ) { values ->
+                    GlassesSettingsBundle(
+                        glassesEnabled = values[0] as Boolean,
+                        glassesBridgeUrl = (values[1] as? String) ?: "",
+                        glassesAutoSend = values[2] as Boolean,
+                        glassesAutoConnect = values[3] as Boolean
+                    )
+                }
+            ) { base, glasses ->
+                base.copy(
+                    glassesEnabled = glasses.glassesEnabled,
+                    glassesBridgeUrl = glasses.glassesBridgeUrl,
+                    glassesAutoSend = glasses.glassesAutoSend,
+                    glassesAutoConnect = glasses.glassesAutoConnect
+                )
             }.collect { settings ->
                 _state.update { it.copy(
                     apiKey = settings.apiKey,
@@ -117,7 +143,11 @@ class SettingsViewModel @Inject constructor(
                     auditRetentionDays = settings.auditRetentionDays,
                     ttsEnabled = settings.ttsEnabled,
                     ttsVoiceId = settings.ttsVoiceId,
-                    ttsAutoSpeak = settings.ttsAutoSpeak
+                    ttsAutoSpeak = settings.ttsAutoSpeak,
+                    glassesEnabled = settings.glassesEnabled,
+                    glassesBridgeUrl = settings.glassesBridgeUrl,
+                    glassesAutoSend = settings.glassesAutoSend,
+                    glassesAutoConnect = settings.glassesAutoConnect
                 )}
             }
         }
@@ -266,6 +296,35 @@ class SettingsViewModel @Inject constructor(
             _state.update { it.copy(ttsAutoSpeak = enabled) }
         }
     }
+
+    // Smart Glasses settings
+    fun setGlassesEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setGlassesEnabled(enabled)
+            _state.update { it.copy(glassesEnabled = enabled) }
+        }
+    }
+
+    fun setGlassesBridgeUrl(url: String) {
+        viewModelScope.launch {
+            settingsStore.setGlassesBridgeUrl(url.ifBlank { null })
+            _state.update { it.copy(glassesBridgeUrl = url) }
+        }
+    }
+
+    fun setGlassesAutoSend(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setGlassesAutoSend(enabled)
+            _state.update { it.copy(glassesAutoSend = enabled) }
+        }
+    }
+
+    fun setGlassesAutoConnect(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setGlassesAutoConnect(enabled)
+            _state.update { it.copy(glassesAutoConnect = enabled) }
+        }
+    }
 }
 
 private data class TtsSettingsBundle(
@@ -274,4 +333,11 @@ private data class TtsSettingsBundle(
     val ttsEnabled: Boolean,
     val ttsVoiceId: String,
     val ttsAutoSpeak: Boolean
+)
+
+private data class GlassesSettingsBundle(
+    val glassesEnabled: Boolean,
+    val glassesBridgeUrl: String,
+    val glassesAutoSend: Boolean,
+    val glassesAutoConnect: Boolean
 )
