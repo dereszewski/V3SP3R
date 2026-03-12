@@ -48,7 +48,7 @@
 
     <!-- Device -->
     <string name="device_battery">Battery: %d%%</string>
-    <string name="device_storage">Storage: %s / %s</string>
+    <string name="device_storage">Storage: %1$s / %2$s</string>
     <string name="device_firmware">Firmware: %s</string>
 
     <!-- Notifications -->

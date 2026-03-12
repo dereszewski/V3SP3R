@@ -40,6 +40,8 @@ class OpenRouterClient @Inject constructor(
         ignoreUnknownKeys = true
         encodeDefaults = true
         explicitNulls = false
+        coerceInputValues = true
+        isLenient = true
     }
 
     private val client = OkHttpClient.Builder()
@@ -605,7 +607,14 @@ class OpenRouterClient @Inject constructor(
 
         // Fallback: tolerate missing non-critical fields and args shape variations.
         return runCatching {
-            val rootElement = json.parseToJsonElement(trimmedArguments)
+            val rawElement = json.parseToJsonElement(trimmedArguments)
+
+            // Unwrap single-element JSON arrays — some models wrap args in [{...}].
+            val rootElement = when {
+                rawElement is JsonArray && rawElement.size == 1 -> rawElement[0]
+                else -> rawElement
+            }
+
             val root = rootElement as? JsonObject ?: return ParsedCommand(
                 error = "Tool arguments must be a JSON object, got ${describeJsonType(rootElement)}. " +
                         "Expected format: $EXPECTED_TOOL_ARGUMENTS_FORMAT"
@@ -1457,22 +1466,22 @@ data class OpenRouterToolFunction(
 
 @Serializable
 data class OpenRouterToolCall(
-    val id: String,
-    val type: String,
-    val function: OpenRouterFunction
+    val id: String = "",
+    val type: String = "function",
+    val function: OpenRouterFunction = OpenRouterFunction()
 )
 
 @Serializable
 data class OpenRouterFunction(
-    val name: String,
-    val arguments: String
+    val name: String = "",
+    val arguments: String = ""
 )
 
 @Serializable
 data class OpenRouterResponse(
-    val id: String,
-    val model: String,
-    val choices: List<OpenRouterChoice>,
+    val id: String = "",
+    val model: String = "",
+    val choices: List<OpenRouterChoice> = emptyList(),
     val usage: OpenRouterUsage? = null
 )
 

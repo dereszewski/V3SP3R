@@ -1,5 +1,6 @@
 package com.vesper.flipper.domain.protocol
 
+import android.util.Log
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -20,17 +21,22 @@ object PwnagotchiProtocol {
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
+        coerceInputValues = true
+        isLenient = true
     }
 
     /**
      * Parse Pwnagotchi advertisement frame
      */
+    private const val TAG = "PwnagotchiProtocol"
+
     fun parseAdvertisement(data: ByteArray): PwnagotchiPeer? {
         return try {
             // Pwnagotchi uses a specific format in its WiFi beacon
             val jsonStr = extractJsonFromBeacon(data) ?: return null
             json.decodeFromString<PwnagotchiPeer>(jsonStr)
         } catch (e: Exception) {
+            Log.d(TAG, "Failed to parse Pwnagotchi beacon (${data.size} bytes): ${e.message}")
             null
         }
     }
