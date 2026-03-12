@@ -1,4 +1,5 @@
 import { WebSocketServer, WebSocket } from "ws";
+import { createServer } from "http";
 
 /**
  * V3SP3R ↔ Mentra Glasses Bridge Server
@@ -8,13 +9,11 @@ import { WebSocketServer, WebSocket } from "ws";
  *   - V3SP3R Android app
  *
  * Architecture:
- *   [Glasses] → (WebSocket) → [This Bridge] → (WebSocket) → [V3SP3R App]
- *                                    ↕
- *                           [MentraOS Cloud API]
+ *   [Glasses] → (MentraOS Cloud) → [This Bridge] → (WebSocket) → [V3SP3R App]
  *
- * The bridge translates glasses events (voice transcriptions, camera frames)
- * into the V3SP3R wire protocol and relays AI responses back to the glasses
- * for TTS playback and HUD display.
+ * Modes:
+ *   1. Standalone relay (default) — glasses connect directly via WebSocket
+ *   2. MentraOS mode — set MENTRA_API_KEY env var to enable native SDK integration
  *
  * Deployment: Railway, Fly.io, Render, or local with ngrok for dev.
  */
@@ -58,7 +57,7 @@ function getGlassesClients(): WebSocket[] {
     .map(([ws]) => ws);
 }
 
-function broadcast(targets: WebSocket[], message: GlassesMessage) {
+export function broadcast(targets: WebSocket[], message: GlassesMessage) {
   const payload = JSON.stringify(message);
   for (const ws of targets) {
     if (ws.readyState === WebSocket.OPEN) {
@@ -67,10 +66,9 @@ function broadcast(targets: WebSocket[], message: GlassesMessage) {
   }
 }
 
-// ==================== Server ====================
+// ==================== WebSocket Relay Server ====================
 
 const PORT = parseInt(process.env.PORT || "8089", 10);
-
 const wss = new WebSocketServer({ port: PORT });
 
 console.log(`V3SP3R Glasses Bridge running on port ${PORT}`);
@@ -81,7 +79,7 @@ wss.on("connection", (ws, req) => {
 
   const client: ConnectedClient = {
     ws,
-    type: clientType,
+    type: clientType as "glasses" | "vesper" | "unknown",
     connectedAt: Date.now(),
   };
   clients.set(ws, client);
@@ -109,7 +107,6 @@ wss.on("connection", (ws, req) => {
     clients.delete(ws);
   });
 
-  // Send welcome
   ws.send(
     JSON.stringify({
       type: "STATUS_UPDATE",
@@ -127,76 +124,236 @@ function handleMessage(sender: WebSocket, message: GlassesMessage) {
   if (!client) return;
 
   switch (message.type) {
-    // Glasses → V3SP3R: relay voice and camera to the Android app
     case "VOICE_TRANSCRIPTION":
     case "CAMERA_PHOTO":
     case "VOICE_COMMAND":
-      // Auto-detect client type from message direction
       if (client.type === "unknown") {
         client.type = "glasses";
-        console.log(`Client identified as glasses`);
+        console.log("Client identified as glasses");
       }
       broadcast(getVesperClients(), message);
       break;
 
-    // V3SP3R → Glasses: relay AI responses back to glasses
     case "AI_RESPONSE":
     case "STATUS_UPDATE":
       if (client.type === "unknown") {
         client.type = "vesper";
-        console.log(`Client identified as vesper`);
+        console.log("Client identified as vesper");
       }
       broadcast(getGlassesClients(), message);
       break;
   }
 }
 
-// ==================== MentraOS Integration ====================
-// When MentraOS SDK is available, uncomment and configure:
-//
-// import { AppServer } from '@mentraos/sdk';
-//
-// class VesperGlassesBridge extends AppServer {
-//   async onSession(session: any, sessionId: string, userId: string) {
-//
-//     // Voice → V3SP3R
-//     session.events.onTranscription((data: any) => {
-//       if (data.isFinal) {
-//         broadcast(getVesperClients(), {
-//           type: 'VOICE_TRANSCRIPTION',
-//           text: data.text,
-//           isFinal: true,
-//           metadata: { source: 'mentra', sessionId }
-//         });
-//       }
-//     });
-//
-//     // Camera → V3SP3R (triggered by voice command "what am I looking at?")
-//     // const photo = await session.camera.requestPhoto({
-//     //   metadata: { reason: 'vesper-vision' }
-//     // });
-//     // const imageBase64 = Buffer.from(photo.photoData).toString('base64');
-//     // broadcast(getVesperClients(), {
-//     //   type: 'CAMERA_PHOTO',
-//     //   text: 'What am I looking at?',
-//     //   imageBase64,
-//     //   imageMimeType: photo.mimeType || 'image/jpeg'
-//     // });
-//
-//     // V3SP3R → Glasses: listen for AI responses and speak them
-//     // (This would be triggered by messages from getGlassesClients)
-//     // session.audio.speak(responseText, { language: 'en-US' });
-//     // session.layouts.showTextWall(displayText);
-//   }
-// }
-//
-// const mentraApp = new VesperGlassesBridge({ port: PORT });
-// mentraApp.start();
+// ==================== MentraOS Native Integration ====================
+// Activated when MENTRA_API_KEY is set.
+// Uses @mentra/sdk v2.1.29 — verified API surface.
+
+async function startMentraIntegration() {
+  const apiKey = process.env.MENTRA_API_KEY;
+  if (!apiKey) {
+    console.log(
+      "MentraOS: No MENTRA_API_KEY set — running in standalone relay mode."
+    );
+    console.log(
+      "  Set MENTRA_API_KEY to enable native Mentra glasses integration."
+    );
+    return;
+  }
+
+  try {
+    // Dynamic import so the bridge works without @mentra/sdk installed
+    const { AppServer } = await import("@mentra/sdk");
+
+    const packageName =
+      process.env.MENTRA_PACKAGE_NAME || "com.vesper.glasses";
+    const mentraPort = parseInt(process.env.MENTRA_PORT || "3000", 10);
+
+    class VesperGlassesBridge extends AppServer {
+      protected async onSession(
+        session: any,
+        sessionId: string,
+        userId: string
+      ) {
+        console.log(
+          `[MentraOS] Session started: ${sessionId} (user: ${userId})`
+        );
+
+        // Show welcome on glasses HUD
+        await session.layouts.showTextWall("V3SP3R Connected", {
+          durationMs: 3000,
+        });
+
+        // ── Voice → V3SP3R ────────────────────────────────────────
+        session.events.onTranscription(
+          (data: {
+            text: string;
+            isFinal: boolean;
+            transcribeLanguage?: string;
+          }) => {
+            if (!data.isFinal || !data.text.trim()) return;
+
+            console.log(`[MentraOS] Voice: "${data.text}"`);
+            broadcast(getVesperClients(), {
+              type: "VOICE_TRANSCRIPTION",
+              text: data.text.trim(),
+              isFinal: true,
+              metadata: {
+                source: "mentra",
+                sessionId,
+                language: data.transcribeLanguage || "en",
+              },
+            });
+
+            // Vision trigger: detect "what am I looking at" style commands
+            const visionTriggers = [
+              "what am i looking at",
+              "what do you see",
+              "what is this",
+              "analyze this",
+              "scan this",
+              "identify this",
+            ];
+            const lowerText = data.text.toLowerCase().trim();
+            if (visionTriggers.some((t) => lowerText.includes(t))) {
+              captureAndAnalyze(session, data.text);
+            }
+          }
+        );
+
+        // ── Camera events → V3SP3R ───────────────────────────────
+        session.events.onPhotoTaken(
+          (data: { photoData: ArrayBuffer }) => {
+            const imageBase64 = Buffer.from(data.photoData).toString("base64");
+            console.log(`[MentraOS] Photo captured: ${imageBase64.length} chars`);
+
+            broadcast(getVesperClients(), {
+              type: "CAMERA_PHOTO",
+              text: "What am I looking at?",
+              imageBase64,
+              imageMimeType: "image/jpeg",
+              metadata: { source: "mentra", sessionId },
+            });
+          }
+        );
+
+        // ── V3SP3R → Glasses (listen for AI responses on the relay) ──
+        // The relay server broadcasts to glasses clients, but for native
+        // MentraOS we also need to push through the session APIs.
+        const responseListener = setInterval(() => {
+          // This is handled by the relay broadcast to the glasses WebSocket
+          // client. For direct MentraOS sessions, we intercept below.
+        }, 60000);
+
+        // Register a virtual "glasses" client for this MentraOS session
+        // so relay broadcasts reach it.
+        const virtualWs = {
+          readyState: WebSocket.OPEN,
+          send: (payload: string) => {
+            try {
+              const message: GlassesMessage = JSON.parse(payload);
+              handleMentraResponse(session, message);
+            } catch {
+              // ignore
+            }
+          },
+        } as unknown as WebSocket;
+
+        clients.set(virtualWs, {
+          ws: virtualWs,
+          type: "glasses",
+          connectedAt: Date.now(),
+        });
+
+        // Cleanup on session end
+        session.addCleanupHandler?.(() => {
+          clearInterval(responseListener);
+          clients.delete(virtualWs);
+          console.log(`[MentraOS] Session ended: ${sessionId}`);
+        });
+      }
+    }
+
+    const app = new VesperGlassesBridge({
+      packageName,
+      apiKey,
+      port: mentraPort,
+    });
+
+    await app.start();
+    console.log(
+      `[MentraOS] Native integration active on port ${mentraPort}`
+    );
+    console.log(`[MentraOS] Package: ${packageName}`);
+  } catch (e) {
+    console.warn(
+      "[MentraOS] SDK not available — running in standalone relay mode."
+    );
+    console.warn(`  Install with: npm install @mentra/sdk`);
+    console.warn(`  Error: ${(e as Error).message}`);
+  }
+}
+
+/** Capture a photo from glasses camera and send for vision analysis. */
+async function captureAndAnalyze(session: any, prompt: string) {
+  try {
+    await session.layouts.showTextWall("Capturing...", { durationMs: 2000 });
+
+    const photo = await session.camera.requestPhoto({
+      metadata: { reason: "vesper-vision" },
+    });
+
+    const imageBase64 = Buffer.from(photo.photoData).toString("base64");
+
+    broadcast(getVesperClients(), {
+      type: "CAMERA_PHOTO",
+      text: prompt,
+      imageBase64,
+      imageMimeType: photo.mimeType || "image/jpeg",
+      metadata: { source: "mentra" },
+    });
+
+    await session.layouts.showTextWall("Analyzing...", { durationMs: 3000 });
+  } catch (e) {
+    console.error("[MentraOS] Vision capture failed:", (e as Error).message);
+  }
+}
+
+/** Handle V3SP3R AI responses — speak + display on MentraOS glasses. */
+async function handleMentraResponse(session: any, message: GlassesMessage) {
+  try {
+    switch (message.type) {
+      case "AI_RESPONSE":
+        if (message.text) {
+          await session.audio.speak(message.text, { language: "en-US" });
+        }
+        if (message.displayText) {
+          await session.layouts.showReferenceCard({
+            title: "V3SP3R",
+            text: message.displayText,
+          });
+        }
+        break;
+
+      case "STATUS_UPDATE":
+        if (message.text) {
+          await session.layouts.showTextWall(message.text, {
+            durationMs: 5000,
+          });
+        }
+        break;
+    }
+  } catch (e) {
+    console.warn("[MentraOS] Response delivery failed:", (e as Error).message);
+  }
+}
+
+// Start MentraOS integration (non-blocking — falls back to relay-only mode)
+startMentraIntegration();
 
 // ==================== Health Check ====================
 
-// Basic HTTP health check for deployment platforms
-import { createServer } from "http";
+const HTTP_PORT = parseInt(process.env.HTTP_PORT || "8090", 10);
 
 const httpServer = createServer((req, res) => {
   if (req.url === "/health") {
@@ -206,6 +363,7 @@ const httpServer = createServer((req, res) => {
         status: "ok",
         glasses: getGlassesClients().length,
         vesper: getVesperClients().length,
+        mentra: !!process.env.MENTRA_API_KEY,
         uptime: process.uptime(),
       })
     );
@@ -215,7 +373,6 @@ const httpServer = createServer((req, res) => {
   }
 });
 
-const HTTP_PORT = parseInt(process.env.HTTP_PORT || "8090", 10);
 httpServer.listen(HTTP_PORT, () => {
   console.log(`Health check on port ${HTTP_PORT}`);
 });

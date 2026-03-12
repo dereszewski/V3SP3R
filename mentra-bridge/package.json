@@ -9,6 +9,7 @@
     "dev": "ts-node src/index.ts"
   },
   "dependencies": {
+    "@mentra/sdk": "^2.1.29",
     "ws": "^8.16.0"
   },
   "devDependencies": {
