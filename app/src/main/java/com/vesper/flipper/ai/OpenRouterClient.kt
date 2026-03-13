@@ -187,7 +187,7 @@ class OpenRouterClient @Inject constructor(
      * attachments with the text description. This allows the primary model
      * (which may not support images) to understand what the user photographed.
      */
-    private suspend fun preprocessImagesAsText(
+    internal suspend fun preprocessImagesAsText(
         messages: List<ChatMessage>,
         apiKey: String
     ): List<ChatMessage> = coroutineScope {
