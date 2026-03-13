@@ -407,9 +407,11 @@ async function startMentraIntegration() {
         // mini app. Also serves as a health-check log line.
         const keepaliveTimer = setInterval(async () => {
           try {
-            await session.layouts.showTextWall("V3SP3R Active", {
-              durationMs: 1000,
-            });
+            if (session.isConnected?.() ?? true) {
+              await session.layouts.showTextWall("V3SP3R Active", {
+                durationMs: 1000,
+              });
+            }
           } catch {
             // Session may have ended — cleanup will handle it
           }
