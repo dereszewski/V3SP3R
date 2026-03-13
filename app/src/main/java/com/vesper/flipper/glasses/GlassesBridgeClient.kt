@@ -64,7 +64,13 @@ class GlassesBridgeClient @Inject constructor() {
      *            or "ws://192.168.1.100:8089/ws" for local dev)
      */
     fun connect(url: String) {
-        if (webSocket != null) disconnect()
+        // Tear down any existing connection first
+        reconnectJob?.cancel()
+        reconnectJob = null
+        isConnecting.set(false)
+        webSocket?.cancel() // Hard cancel — avoids async onClosed clobbering new state
+        webSocket = null
+
         val sanitized = sanitizeUrl(url)
         if (sanitized == null) {
             _state.value = BridgeState.Error("Invalid bridge URL: $url")
@@ -84,6 +90,7 @@ class GlassesBridgeClient @Inject constructor() {
         reconnectJob = null
         bridgeUrl = null
         reconnectAttempts = 0
+        isConnecting.set(false)
         webSocket?.close(1000, "User disconnect")
         webSocket = null
         _state.value = BridgeState.Disconnected
@@ -121,7 +128,10 @@ class GlassesBridgeClient @Inject constructor() {
     // ==================== Internal ====================
 
     private fun doConnect(url: String) {
-        if (!isConnecting.compareAndSet(false, true)) return
+        if (!isConnecting.compareAndSet(false, true)) {
+            Log.w(TAG, "doConnect skipped — another connection attempt is already in progress")
+            return
+        }
         _state.value = BridgeState.Connecting(url)
         Log.i(TAG, "Connecting to glasses bridge: $url")
 
@@ -169,10 +179,13 @@ class GlassesBridgeClient @Inject constructor() {
                 isConnecting.set(false)
                 this@GlassesBridgeClient.webSocket = null
                 Log.i(TAG, "Bridge connection closed (code=$code): $reason")
-                if (code != 1000) {
+                if (code == 1000) {
+                    // Normal close (user disconnect) — don't reconnect
+                    _state.value = BridgeState.Disconnected
+                } else {
                     _state.value = BridgeState.Error("Connection closed: $reason (code $code)")
+                    scheduleReconnect()
                 }
-                scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
