@@ -72,6 +72,15 @@ export function broadcast(targets: WebSocket[], message: GlassesMessage) {
 let sailorMouthEnabled = false;
 let glassesMuted = false;
 
+// ── TTS Echo Suppression ──────────────────────────────────────────
+// When TTS is playing, the glasses mic picks up the audio and
+// re-transcribes it as a user utterance, creating a feedback loop.
+// We suppress transcriptions during TTS playback + a brief cooldown.
+let ttsSpeaking = false;
+let ttsEchoSuppressionUntil = 0;
+const TTS_ECHO_COOLDOWN_MS = 2500; // Extra silence after TTS ends
+let lastSpokenText = ""; // Track what was spoken to detect echoes
+
 // Track session context so greetings feel natural
 let wakeCount = 0;
 let lastWakeTimestamp = 0;
@@ -402,6 +411,18 @@ async function startMentraIntegration() {
             if (!data.isFinal || !data.text.trim()) return;
             if (glassesMuted) return; // Muted — suppress all voice input
 
+            // ── TTS Echo Suppression ────────────────────────────
+            // Suppress transcriptions while TTS is playing or in cooldown
+            if (ttsSpeaking || Date.now() < ttsEchoSuppressionUntil) {
+              console.log(`[Echo] Suppressed during TTS: "${data.text.trim().slice(0, 40)}"`);
+              return;
+            }
+            // Also catch echoes that slip past the timing window
+            if (isLikelyTtsEcho(data.text.trim())) {
+              console.log(`[Echo] Suppressed echo match: "${data.text.trim().slice(0, 40)}"`);
+              return;
+            }
+
             const rawText = data.text.trim();
             const lowerText = rawText.toLowerCase();
 
@@ -428,12 +449,7 @@ async function startMentraIntegration() {
 
               // Greet on wake — cancel any in-flight speech first
               try { await session.audio.stop(); } catch { /* no-op */ }
-              session.audio
-                .speak(getWakeGreeting(hasCommand), {
-                  language: "en-GB",
-                  voice: "en-GB-Wavenet-F",
-                })
-                .catch(() => {});
+              speakWithEchoGuard(session, getWakeGreeting(hasCommand)).catch(() => {});
 
               if (hasCommand) {
                 // "Hey Vesper, scan this" — immediate command
@@ -713,18 +729,53 @@ async function captureAndAnalyze(session: any, prompt: string) {
   }
 }
 
+/**
+ * Speak text through glasses TTS with echo suppression.
+ * Sets flags so the transcription handler knows to ignore mic input
+ * that is just the glasses speaker being picked up.
+ */
+async function speakWithEchoGuard(session: any, text: string) {
+  ttsSpeaking = true;
+  lastSpokenText = text.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  try {
+    await session.audio.speak(text, {
+      language: "en-GB",
+      voice: "en-GB-Wavenet-F",
+    });
+  } finally {
+    ttsSpeaking = false;
+    ttsEchoSuppressionUntil = Date.now() + TTS_ECHO_COOLDOWN_MS;
+  }
+}
+
+/**
+ * Check if a transcription looks like an echo of recent TTS output.
+ * Compares normalized text similarity.
+ */
+function isLikelyTtsEcho(transcription: string): boolean {
+  if (!lastSpokenText) return false;
+  const normalized = transcription.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  if (!normalized) return false;
+  // Check if the transcription is a substring of what was spoken or vice versa
+  if (lastSpokenText.includes(normalized) || normalized.includes(lastSpokenText)) {
+    return true;
+  }
+  // Check word overlap — if >60% of words match, it's an echo
+  const spokenWords = new Set(lastSpokenText.split(/\s+/));
+  const transWords = normalized.split(/\s+/);
+  if (transWords.length === 0) return false;
+  const overlap = transWords.filter(w => spokenWords.has(w)).length;
+  return overlap / transWords.length > 0.6;
+}
+
 /** Handle V3SP3R AI responses — speak + display on MentraOS glasses. */
 async function handleMentraResponse(session: any, message: GlassesMessage) {
   try {
     switch (message.type) {
       case "AI_RESPONSE":
         if (message.text) {
-          // Cancel any in-flight speech to prevent overlapping voices
-          try { await session.audio.stop(); } catch { /* no-op if not supported */ }
-          await session.audio.speak(message.text, {
-            language: "en-GB",
-            voice: "en-GB-Wavenet-F",
-          });
+          try { await session.audio.stop(); } catch { /* no-op */ }
+          await speakWithEchoGuard(session, message.text);
         }
         if (message.displayText) {
           await session.layouts.showReferenceCard({
@@ -739,14 +790,9 @@ async function handleMentraResponse(session: any, message: GlassesMessage) {
           await session.layouts.showTextWall(message.text, {
             durationMs: 5000,
           });
-          // Speak short status updates so user gets audio feedback
-          // (e.g. "Thinking...", "Executing read_file"). Skip long ones.
           if (message.text.length <= 50) {
             try { await session.audio.stop(); } catch { /* no-op */ }
-            await session.audio.speak(message.text, {
-              language: "en-GB",
-              voice: "en-GB-Wavenet-F",
-            });
+            await speakWithEchoGuard(session, message.text);
           }
         }
         break;
