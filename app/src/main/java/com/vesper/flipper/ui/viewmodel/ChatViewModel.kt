@@ -493,10 +493,19 @@ class ChatViewModel @Inject constructor(
         glassesIntegration.clearPendingPhoto() // Clear glasses hold timer
 
         viewModelScope.launch {
-            vesperAgent.sendMessage(
-                userMessage = message,
-                imageAttachments = images.ifEmpty { null }
-            )
+            try {
+                vesperAgent.sendMessage(
+                    userMessage = message,
+                    imageAttachments = images.ifEmpty { null }
+                )
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // VesperAgent.sendMessage() has its own try-catch that resets
+                // isLoading. This outer catch handles truly unexpected errors
+                // (e.g. serialization bugs) so the user sees feedback.
+                Log.e(TAG, "sendMessage failed", e)
+                _imageError.value = "Failed to send: ${e.message?.take(80) ?: "unknown error"}"
+            }
         }
     }
 
