@@ -509,6 +509,24 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private var retryInFlight = false
+
+    fun retryLastMessage() {
+        if (retryInFlight) return
+        retryInFlight = true
+        viewModelScope.launch {
+            try {
+                vesperAgent.retryLastMessage()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.e(TAG, "retryLastMessage failed", e)
+                _imageError.value = "Retry failed: ${e.message?.take(80) ?: "unknown error"}"
+            } finally {
+                retryInFlight = false
+            }
+        }
+    }
+
     fun approveAction(approvalId: String? = null) {
         if (approvalDecisionInFlight) return
         val targetApprovalId = approvalId ?: conversationState.value.pendingApproval?.id ?: return

@@ -2,11 +2,13 @@ package com.vesper.flipper.data.database
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Database(
     entities = [AuditEntryEntity::class, ChatMessageEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class VesperDatabase : RoomDatabase() {
@@ -17,6 +19,13 @@ abstract class VesperDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: VesperDatabase? = null
 
+        /** v1 → v2: add nullable imageAttachmentsJson column to chat_messages. */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN imageAttachmentsJson TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): VesperDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -24,7 +33,8 @@ abstract class VesperDatabase : RoomDatabase() {
                     VesperDatabase::class.java,
                     "vesper_database"
                 )
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(MIGRATION_1_2)
+                    .fallbackToDestructiveMigrationFrom(1)
                     .build()
                 INSTANCE = instance
                 instance
@@ -89,7 +99,8 @@ data class ChatMessageEntity(
     val toolResultsJson: String?,
     val status: String,
     val metadataJson: String?,
-    val sessionId: String
+    val sessionId: String,
+    val imageAttachmentsJson: String? = null
 )
 
 @Dao
